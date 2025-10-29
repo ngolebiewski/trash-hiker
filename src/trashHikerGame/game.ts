@@ -165,7 +165,7 @@ function startLevel() {
     hiker.x = app.screen.width / 2;
     hiker.y = app.screen.height / 2;
     hiker.scale.set(3);
-    hiker.animationSpeed = 0.03;
+    hiker.animationSpeed = 0.017; // Slow idle (~2 seconds)
     hiker.play();
 
     app.stage.addChild(hiker);
@@ -184,12 +184,13 @@ function startLevel() {
         isPickingUp = true;
         hiker.textures = pickupFrames;
         hiker.loop = false;
-        hiker.animationSpeed = 0.2; // Much slower
+        hiker.animationSpeed = 0.25; // Fast pickup animation
         hiker.gotoAndPlay(0);
         hiker.onComplete = () => {
           console.log("Pickup complete");
           isPickingUp = false;
           hiker.loop = true;
+          hiker.animationSpeed = 0.017; // Back to slow idle
           hiker.textures = idleFrames;
           hiker.play();
         };
@@ -243,11 +244,11 @@ function startLevel() {
         isPickingUp = true;
         hiker.textures = pickupFrames;
         hiker.loop = false;
-        hiker.animationSpeed = 0.05;
+        hiker.animationSpeed = 0.25; // Fast pickup
         hiker.gotoAndPlay(0);
         hiker.onComplete = () => {
           console.log("Touch pickup complete");
-          hiker.animationSpeed = 0.03;
+          hiker.animationSpeed = 0.017; // Back to slow idle
           isPickingUp = false;
           hiker.loop = true;
           hiker.textures = idleFrames;
@@ -286,10 +287,11 @@ function startLevel() {
       // Switch between walk and idle
       if (isMoving && hiker.textures !== walkFrames) {
         hiker.textures = walkFrames;
+        hiker.animationSpeed = 0.15; // Fast walk animation
         hiker.loop = true;
         hiker.play();
       } else if (!isMoving && hiker.textures !== idleFrames) {
-        hiker.animationSpeed = 0.03;
+        hiker.animationSpeed = 0.017; // Slow idle (2 seconds)
         hiker.textures = idleFrames;
         hiker.loop = true;
         hiker.play();

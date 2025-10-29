@@ -5,12 +5,22 @@ Pixi.js Game Experiment and Pixel Art Experiment.
 
 ![Trash Hiker Title](/public/readme/trash-hiker-2.png)
 
+## Install + Run locally
+1. Git Clone from Repo
+2. cd into project folder
+3. `npm install`
+4. `npm run dev`
+
 ## Local stuff
 1. I have old Node and new Node. `nvm use 20` to make Vite work.
 
 
 
-# STUFF FROM INSTALL
+
+
+
+
+# STUFF FROM INSTALL THAT I CAN PROBABLY DELETE, AND YOU CAN IGNORE...
 
 # React + TypeScript + Vite
 
