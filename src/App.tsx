@@ -7,6 +7,7 @@ function App() {
 
   return (
     <>
+      {/* <h1>Welcome to Trash Hiker...</h1> */}
       <GameCanvas />
     </>
   )
