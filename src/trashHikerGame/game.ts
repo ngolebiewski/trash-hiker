@@ -6,6 +6,8 @@ import {
   TextStyle,
   AnimatedSprite,
   Texture,
+  Container,
+  Rectangle,
 } from "pixi.js";
 
 let app: Application | null = null;
@@ -16,31 +18,40 @@ interface KeyState {
 
 const keys: KeyState = {};
 
+interface TilemapData {
+  layers: Array<{
+    data: number[];
+    name: string;
+    width: number;
+    height: number;
+  }>;
+  tilewidth: number;
+  tileheight: number;
+  width: number;
+  height: number;
+}
+
 export async function initGame(container: HTMLDivElement) {
   if (app) return; // already running
 
   app = new Application();
   await app.init({
-    // Rendering options
-    width: 800, // Canvas width
-    height: 600, // Canvas height
-    backgroundColor: 0x222222, // Background color
-    antialias: false, // Disable antialiasing for pixel art
-    resolution: 1, // Use 1 for pixel-perfect rendering -- as opposed to DPR?
-    preference: "webgpu", // 'webgl' or 'webgpu' -- GPU sounds cooler
-    // Plugin options
-    autoStart: true, // Start ticker automatically
-    sharedTicker: false, // Use dedicated ticker
-    resizeTo: window, // Auto-resize target
+    width: 800,
+    height: 600,
+    backgroundColor: 0x222222,
+    antialias: false,
+    resolution: 1,
+    preference: "webgpu",
+    autoStart: true,
+    sharedTicker: false,
+    resizeTo: window,
   });
 
   container.appendChild(app.canvas);
 
-  // Set CSS to prevent image smoothing ***SUPER IMPORTANT FOR PIXEL ART!!!***
   app.canvas.style.imageRendering = "pixelated";
   app.canvas.style.imageRendering = "crisp-edges";
 
-  // Load the custom font -- Preloaded in the CSS. Doesn't work if initialized here in Pixi... Weird bug
   await Assets.load({
     alias: "DepartureMono",
     src: "/fonts/DepartureMono-Regular.woff2",
@@ -52,14 +63,11 @@ export async function initGame(container: HTMLDivElement) {
 function showTitleScreen() {
   if (!app) return;
 
-  // Clear stage
   app.stage.removeChildren();
 
-  // Load the Aseprite atlas (JSON will reference the PNG)
   Assets.load("/sprites/trash-hiker-2.json").then((atlas) => {
     if (!app) return;
 
-    // The frame name must match the JSON key exactly
     const titleTexture = atlas.textures["trash-hiker-2.aseprite"];
 
     const title = new Sprite(titleTexture);
@@ -67,20 +75,18 @@ function showTitleScreen() {
     title.x = app.screen.width / 2;
     title.y = app.screen.height / 2;
 
-    // Set texture to use nearest neighbor scaling (no blur)
     titleTexture.source.scaleMode = "nearest";
-
-    // Double the size
     title.scale.set(2);
 
     app.stage.addChild(title);
 
-    // Create start button text
     const style = new TextStyle({
       fontFamily: "DepartureMono",
       fontSize: 48,
       fill: 0xffffff,
     });
+    style.fontStyle = "normal";
+    style.fontWeight = "normal";
 
     const startButton = new Text({
       text: "START",
@@ -91,11 +97,11 @@ function showTitleScreen() {
     startButton.x = app.screen.width / 2;
     startButton.y = app.screen.height * 0.9;
 
-    // Make it interactive
+    startButton.roundPixels = true;
+
     startButton.eventMode = "static";
     startButton.cursor = "pointer";
 
-    // Add hover effect
     startButton.on("pointerover", () => {
       startButton.scale.set(1.1);
     });
@@ -104,7 +110,6 @@ function showTitleScreen() {
       startButton.scale.set(1);
     });
 
-    // Start game on click
     startButton.on("pointertap", () => {
       startLevel();
     });
@@ -113,190 +118,311 @@ function showTitleScreen() {
   });
 }
 
-function startLevel() {
+async function startLevel() {
   if (!app) return;
 
-  // Clear stage
   app.stage.removeChildren();
-
-  // Change background to dark green
   app.renderer.background.color = 0x2d5016;
 
-  // Load the hiker sprite
-  Assets.load("/sprites/hiker.json").then((atlas) => {
-    if (!app) return;
+  // Load tilemap and tileset image
+  const tilemapData = await fetch("/tilemaps/level1.json").then((r) => r.json()) as TilemapData;
+  
+  // Load the tileset as a single image
+  const tilesetTexture = await Assets.load("/sprites/water_bottle.png");
+  tilesetTexture.source.scaleMode = "nearest";
 
-    // Create animations
-    const walkFrames: Texture[] = [];
-    const idleFrames: Texture[] = [];
-    const pickupFrames: Texture[] = [];
+  // Render constants
+  const TILE_SIZE = 32;
+  const SCALE = 2;
+  const TILESET_COLUMNS = 10; // 320px ÷ 32px = 10 tiles wide
 
-    // Walk animation (frames 0-6)
-    for (let i = 0; i <= 6; i++) {
-      const texture = atlas.textures[`hiker ${i}.aseprite`];
-      texture.source.scaleMode = "nearest";
-      walkFrames.push(texture);
+  // Create container for the world (this will move with camera)
+  const worldContainer = new Container();
+  app.stage.addChild(worldContainer);
+
+  // Camera settings
+  const mapWidth = tilemapData.width * TILE_SIZE * SCALE;
+  const mapHeight = tilemapData.height * TILE_SIZE * SCALE;
+
+  // Render tilemap layers
+  const trashPositions: Array<{ x: number; y: number; tileId: number; sprite: Sprite }> = [];
+
+  tilemapData.layers.forEach((layer) => {
+    const layerContainer = new Container();
+    
+    for (let i = 0; i < layer.data.length; i++) {
+      const tileId = layer.data[i];
+      if (tileId === 0) continue; // Skip empty tiles
+
+      const x = (i % layer.width) * TILE_SIZE;
+      const y = Math.floor(i / layer.width) * TILE_SIZE;
+
+      // Handle flipped tiles (Tiled uses bit flags)
+      const flippedH = !!(tileId & 0x80000000);
+      const flippedV = !!(tileId & 0x40000000);
+      const actualTileId = tileId & 0x1fffffff;
+
+      // Calculate position in tileset (tile IDs start at 1)
+      const tileIndex = actualTileId - 1;
+      const tileX = (tileIndex % TILESET_COLUMNS) * TILE_SIZE;
+      const tileY = Math.floor(tileIndex / TILESET_COLUMNS) * TILE_SIZE;
+
+      // Create texture from tileset region
+      const texture = new Texture({
+        source: tilesetTexture.source,
+        frame: new Rectangle(tileX, tileY, TILE_SIZE, TILE_SIZE),
+      });
+
+      const tile = new Sprite(texture);
+      tile.x = x * SCALE; // Apply scale to position
+      tile.y = y * SCALE; // Apply scale to position
+      tile.scale.set(SCALE);
+
+      // Apply flips
+      if (flippedH) tile.scale.x *= -1;
+      if (flippedV) tile.scale.y *= -1;
+
+      layerContainer.addChild(tile);
+
+      // Track trash items
+      if (layer.name === "trash") {
+        trashPositions.push({ x, y, tileId: actualTileId, sprite: tile });
+      }
     }
 
-    // Idle animation (frames 7-8)
-    for (let i = 7; i <= 8; i++) {
-      const texture = atlas.textures[`hiker ${i}.aseprite`];
-      texture.source.scaleMode = "nearest";
-      idleFrames.push(texture);
-    }
+    worldContainer.addChild(layerContainer);
+  });
 
-    // Pickup animation (frames 9-13) with pingpong
-    for (let i = 9; i <= 13; i++) {
-      const texture = atlas.textures[`hiker ${i}.aseprite`];
-      texture.source.scaleMode = "nearest";
-      pickupFrames.push(texture);
-    }
-    // Add reverse frames for pingpong effect (12 back to 10, not 9)
-    for (let i = 12; i >= 10; i--) {
-      const texture = atlas.textures[`hiker ${i}.aseprite`];
-      pickupFrames.push(texture);
-    }
+  // Load hiker
+  const hikerAtlas = await Assets.load("/sprites/hiker.json");
 
-    console.log("Pickup frames created:", pickupFrames.length);
+  const walkFrames: Texture[] = [];
+  const idleFrames: Texture[] = [];
+  const pickupFrames: Texture[] = [];
 
-    // Create the animated sprite starting with idle
-    const hiker = new AnimatedSprite(idleFrames);
-    hiker.anchor.set(0.5);
-    hiker.x = app.screen.width / 2;
-    hiker.y = app.screen.height / 2;
-    hiker.scale.set(3);
-    hiker.animationSpeed = 0.017; // Slow idle (~2 seconds)
-    hiker.play();
+  for (let i = 0; i <= 6; i++) {
+    const texture = hikerAtlas.textures[`hiker ${i}.aseprite`];
+    texture.source.scaleMode = "nearest";
+    walkFrames.push(texture);
+  }
 
-    app.stage.addChild(hiker);
+  for (let i = 7; i <= 8; i++) {
+    const texture = hikerAtlas.textures[`hiker ${i}.aseprite`];
+    texture.source.scaleMode = "nearest";
+    idleFrames.push(texture);
+  }
 
-    // Player state
-    let isPickingUp = false;
-    const moveSpeed = 3;
+  for (let i = 9; i <= 13; i++) {
+    const texture = hikerAtlas.textures[`hiker ${i}.aseprite`];
+    texture.source.scaleMode = "nearest";
+    pickupFrames.push(texture);
+  }
+  for (let i = 12; i >= 10; i--) {
+    const texture = hikerAtlas.textures[`hiker ${i}.aseprite`];
+    pickupFrames.push(texture);
+  }
 
-    // Keyboard controls
-    window.addEventListener("keydown", (e) => {
-      keys[e.key.toLowerCase()] = true;
+  const hiker = new AnimatedSprite(idleFrames);
+  hiker.anchor.set(0.5);
+  hiker.x = app.screen.width / 2;
+  hiker.y = app.screen.height / 2;
+  hiker.scale.set(3);
+  hiker.animationSpeed = 0.017;
+  hiker.play();
 
-      // Spacebar for pickup
-      if (e.key === " " && !isPickingUp) {
-        console.log("Pickup triggered, frames:", pickupFrames.length);
+  worldContainer.addChild(hiker);
+
+  // Hiker's actual position in world coordinates
+  let hikerWorldX = 100;
+  let hikerWorldY = 100;
+
+  // Game state
+  let isPickingUp = false;
+  let collectedTrash = 0;
+  const moveSpeed = 3;
+  const PICKUP_RANGE = 50;
+
+  // Trash counter
+  const counterStyle = new TextStyle({
+    fontFamily: "DepartureMono",
+    fontSize: 24,
+    fill: 0xffffff,
+  });
+
+  const trashCounter = new Text({
+    text: `Trash: ${collectedTrash}/${trashPositions.length}`,
+    style: counterStyle,
+  });
+  trashCounter.x = 10;
+  trashCounter.y = 10;
+  trashCounter.roundPixels = true;
+  app.stage.addChild(trashCounter);
+
+  // Keyboard controls
+  window.addEventListener("keydown", (e) => {
+    keys[e.key.toLowerCase()] = true;
+
+    if (e.key === " " && !isPickingUp) {
+      // Check if near trash
+      const nearbyTrash = trashPositions.find((trash) => {
+        if (!trash.sprite.visible) return false;
+        const dx = trash.x * SCALE + (TILE_SIZE * SCALE) / 2 - hikerWorldX;
+        const dy = trash.y * SCALE + (TILE_SIZE * SCALE) / 2 - hikerWorldY;
+        return Math.sqrt(dx * dx + dy * dy) < PICKUP_RANGE;
+      });
+
+      if (nearbyTrash) {
         isPickingUp = true;
         hiker.textures = pickupFrames;
         hiker.loop = false;
-        hiker.animationSpeed = 0.25; // Fast pickup animation
+        hiker.animationSpeed = 0.4; // Faster pickup
         hiker.gotoAndPlay(0);
         hiker.onComplete = () => {
-          console.log("Pickup complete");
           isPickingUp = false;
           hiker.loop = true;
-          hiker.animationSpeed = 0.017; // Back to slow idle
+          hiker.animationSpeed = 0.017;
           hiker.textures = idleFrames;
           hiker.play();
+
+          // Collect the trash
+          if (nearbyTrash) {
+            nearbyTrash.sprite.visible = false;
+            collectedTrash++;
+            trashCounter.text = `Trash: ${collectedTrash}/${trashPositions.length}`;
+          }
         };
       }
-    });
+    }
+  });
 
-    window.addEventListener("keyup", (e) => {
-      keys[e.key.toLowerCase()] = false;
-    });
+  window.addEventListener("keyup", (e) => {
+    keys[e.key.toLowerCase()] = false;
+  });
 
-    // Touch/pointer controls for mobile
-    let touchStartX = 0;
-    let touchStartY = 0;
+  // Touch controls
+  let touchStartX = 0;
+  let touchStartY = 0;
 
-    app.canvas.addEventListener("touchstart", (e) => {
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-    });
+  app.canvas.addEventListener("touchstart", (e) => {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  });
 
-    app.canvas.addEventListener("touchmove", (e) => {
-      e.preventDefault();
-      const deltaX = e.touches[0].clientX - touchStartX;
-      const deltaY = e.touches[0].clientY - touchStartY;
+  app.canvas.addEventListener("touchmove", (e) => {
+    e.preventDefault();
+    const deltaX = e.touches[0].clientX - touchStartX;
+    const deltaY = e.touches[0].clientY - touchStartY;
 
-      if (Math.abs(deltaX) > Math.abs(deltaY)) {
-        keys["a"] = deltaX < -20;
-        keys["d"] = deltaX > 20;
-      } else {
-        keys["w"] = deltaY < -20;
-        keys["s"] = deltaY > 20;
-      }
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+      keys["a"] = deltaX < -20;
+      keys["d"] = deltaX > 20;
+    } else {
+      keys["w"] = deltaY < -20;
+      keys["s"] = deltaY > 20;
+    }
 
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-    });
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  });
 
-    app.canvas.addEventListener("touchend", () => {
-      keys["w"] = false;
-      keys["a"] = false;
-      keys["s"] = false;
-      keys["d"] = false;
-    });
+  app.canvas.addEventListener("touchend", () => {
+    keys["w"] = false;
+    keys["a"] = false;
+    keys["s"] = false;
+    keys["d"] = false;
+  });
 
-    // Tap for pickup
-    let lastTap = 0;
-    app.canvas.addEventListener("touchend", (e) => {
-      console.log(e);
-      const now = Date.now();
-      if (now - lastTap < 300 && !isPickingUp) {
-        console.log("Touch pickup triggered");
+  let lastTap = 0;
+  app.canvas.addEventListener("touchend", () => {
+    const now = Date.now();
+    if (now - lastTap < 300 && !isPickingUp) {
+      const nearbyTrash = trashPositions.find((trash) => {
+        if (!trash.sprite.visible) return false;
+        const dx = trash.x * SCALE + (TILE_SIZE * SCALE) / 2 - hikerWorldX;
+        const dy = trash.y * SCALE + (TILE_SIZE * SCALE) / 2 - hikerWorldY;
+        return Math.sqrt(dx * dx + dy * dy) < PICKUP_RANGE;
+      });
+
+      if (nearbyTrash) {
         isPickingUp = true;
         hiker.textures = pickupFrames;
         hiker.loop = false;
-        hiker.animationSpeed = 0.25; // Fast pickup
+        hiker.animationSpeed = 0.4; // Faster pickup
         hiker.gotoAndPlay(0);
         hiker.onComplete = () => {
-          console.log("Touch pickup complete");
-          hiker.animationSpeed = 0.017; // Back to slow idle
+          hiker.animationSpeed = 0.017;
           isPickingUp = false;
           hiker.loop = true;
           hiker.textures = idleFrames;
           hiker.play();
+
+          if (nearbyTrash) {
+            nearbyTrash.sprite.visible = false;
+            collectedTrash++;
+            trashCounter.text = `Trash: ${collectedTrash}/${trashPositions.length}`;
+          }
         };
       }
-      lastTap = now;
-    });
+    }
+    lastTap = now;
+  });
 
-    // Game loop
-    app.ticker.add(() => {
-      if (!hiker || isPickingUp) return;
+  // Game loop
+  app.ticker.add(() => {
+    if (!hiker || isPickingUp) return;
 
-      let isMoving = false;
+    let isMoving = false;
 
-      // WASD/Arrow movement
-      if (keys["w"] || keys["arrowup"]) {
-        hiker.y -= moveSpeed;
-        isMoving = true;
-      }
-      if (keys["s"] || keys["arrowdown"]) {
-        hiker.y += moveSpeed;
-        isMoving = true;
-      }
-      if (keys["a"] || keys["arrowleft"]) {
-        hiker.x -= moveSpeed;
-        hiker.scale.x = Math.abs(hiker.scale.x);
-        isMoving = true;
-      }
-      if (keys["d"] || keys["arrowright"]) {
-        hiker.x += moveSpeed;
-        hiker.scale.x = -Math.abs(hiker.scale.x);
-        isMoving = true;
-      }
+    if (keys["w"] || keys["arrowup"]) {
+      hikerWorldY -= moveSpeed;
+      isMoving = true;
+    }
+    if (keys["s"] || keys["arrowdown"]) {
+      hikerWorldY += moveSpeed;
+      isMoving = true;
+    }
+    if (keys["a"] || keys["arrowleft"]) {
+      hikerWorldX -= moveSpeed;
+      hiker.scale.x = Math.abs(hiker.scale.x);
+      isMoving = true;
+    }
+    if (keys["d"] || keys["arrowright"]) {
+      hikerWorldX += moveSpeed;
+      hiker.scale.x = -Math.abs(hiker.scale.x);
+      isMoving = true;
+    }
 
-      // Switch between walk and idle
-      if (isMoving && hiker.textures !== walkFrames) {
-        hiker.textures = walkFrames;
-        hiker.animationSpeed = 0.15; // Fast walk animation
-        hiker.loop = true;
-        hiker.play();
-      } else if (!isMoving && hiker.textures !== idleFrames) {
-        hiker.animationSpeed = 0.017; // Slow idle (2 seconds)
-        hiker.textures = idleFrames;
-        hiker.loop = true;
-        hiker.play();
-      }
-    });
+    // Keep hiker in bounds
+    hikerWorldX = Math.max(0, Math.min(mapWidth, hikerWorldX));
+    hikerWorldY = Math.max(0, Math.min(mapHeight, hikerWorldY));
+
+    // Update hiker position
+    hiker.x = hikerWorldX;
+    hiker.y = hikerWorldY;
+
+    // Camera follows hiker (center on screen)
+    if (app) {
+      worldContainer.x = app.screen.width / 2 - hikerWorldX;
+      worldContainer.y = app.screen.height / 2 - hikerWorldY;
+    }
+
+    // Clamp camera so we don't show outside the map
+    if (app) {
+      worldContainer.x = Math.min(0, Math.max(app.screen.width - mapWidth, worldContainer.x));
+      worldContainer.y = Math.min(0, Math.max(app.screen.height - mapHeight, worldContainer.y));
+    }
+
+    if (isMoving && hiker.textures !== walkFrames) {
+      hiker.textures = walkFrames;
+      hiker.animationSpeed = 0.15;
+      hiker.loop = true;
+      hiker.play();
+    } else if (!isMoving && hiker.textures !== idleFrames) {
+      hiker.animationSpeed = 0.017;
+      hiker.textures = idleFrames;
+      hiker.loop = true;
+      hiker.play();
+    }
   });
 }
 
