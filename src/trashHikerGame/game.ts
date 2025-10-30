@@ -174,9 +174,10 @@ async function startLevel() {
       });
 
       const tile = new Sprite(texture);
-      tile.x = x * SCALE; // Apply scale to position
-      tile.y = y * SCALE; // Apply scale to position
+      tile.x = x * SCALE;
+      tile.y = y * SCALE;
       tile.scale.set(SCALE);
+      tile.roundPixels = true; // Force integer pixel positions
 
       // Apply flips
       if (flippedH) tile.scale.x *= -1;
@@ -228,6 +229,7 @@ async function startLevel() {
   hiker.y = app.screen.height / 2;
   hiker.scale.set(3);
   hiker.animationSpeed = 0.017;
+  hiker.roundPixels = true; // Force integer pixel positions
   hiker.play();
 
   worldContainer.addChild(hiker);
@@ -402,8 +404,8 @@ async function startLevel() {
 
     // Camera follows hiker (center on screen)
     if (app) {
-      worldContainer.x = app.screen.width / 2 - hikerWorldX;
-      worldContainer.y = app.screen.height / 2 - hikerWorldY;
+      worldContainer.x = Math.round(app.screen.width / 2 - hikerWorldX);
+      worldContainer.y = Math.round(app.screen.height / 2 - hikerWorldY);
     }
 
     // Clamp camera so we don't show outside the map
